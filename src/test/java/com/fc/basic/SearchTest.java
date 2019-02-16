@@ -30,6 +30,7 @@ import org.elasticsearch.search.aggregations.AggregationBuilders;
 import org.elasticsearch.search.aggregations.bucket.histogram.Histogram;
 import org.elasticsearch.search.aggregations.bucket.terms.Terms;
 import org.elasticsearch.search.aggregations.bucket.terms.Terms.Bucket;
+import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.sort.SortOrder;
 import org.junit.Test;
 
@@ -38,35 +39,50 @@ import com.tcrm.support.json.JsonUtils;
 
 public class SearchTest extends BaseTest {
 
+	
 	@Test
-	public void testInitDataIndex() throws IOException {
-		URL url = SearchTest.class.getClassLoader().getResource("data.txt");
-		File file = new File(url.getFile());
-		List<String> contents = readFileByLines(file);
-		BulkRequestBuilder bulkRequest = client.prepareBulk();
-		int index = 0;
-		for (Iterator<String> iterator = contents.iterator(); iterator.hasNext();) {
-			String content = (String) iterator.next();
-			index++;
-			bulkRequest.add(client.prepareIndex("searchdata", "article")
-			        .setSource(XContentFactory.jsonBuilder()
-			                    .startObject()
-			                        .field("row", index)
-			                        .field("added_time", new Date())
-			                        .field("age", (int)(1+Math.random() * 30 ))
-			                        .field("content",content)
-			                    .endObject()
-			                  )
-			        );
-		}
-		BulkResponse bulkResponse = bulkRequest.get();
-		if (bulkResponse.hasFailures()) {
-		    System.out.println("sss");
+	public void testSearchAll() throws IOException {
+		SearchResponse response = client.prepareSearch("twitter", "searchdata")
+		        .setSearchType(SearchType.DFS_QUERY_THEN_FETCH)
+		        .setQuery(QueryBuilders.matchAllQuery())     // Filter
+		        .setFrom(0)
+		        .setSize(500).setExplain(true)
+		        .addSort("row", SortOrder.ASC)
+		        .get();
+		
+		long total = response.getHits().getTotalHits();
+		System.out.println(total);
+		for (int i = 0; i < response.getHits().getHits().length; i++) {
+			SearchHit searchHit = response.getHits().getHits()[i];
+			System.out.println(searchHit.getVersion()+":"+searchHit.getSourceAsString());
 		}
 	}
 	
+	
+	@Test
+	public void testSearchAllWithStard() throws IOException { //指定分片查询
+		SearchResponse response = client.prepareSearch("searchdata")
+		        .setSearchType(SearchType.DFS_QUERY_THEN_FETCH)
+		        .setRouting("xxxx")
+		        .setQuery(QueryBuilders.matchAllQuery())     // Filter
+		        .setFrom(0)
+		        .setSize(500).setExplain(true)
+		        .addSort("row", SortOrder.ASC)
+		        .get();
+		
+		long total = response.getHits().getTotalHits();
+		System.out.println(total);
+		for (int i = 0; i < response.getHits().getHits().length; i++) {
+			SearchHit searchHit = response.getHits().getHits()[i];
+			System.out.println(searchHit.getVersion()+":"+searchHit.getSourceAsString());
+		}
+	}
+	
+	
 	@Test
 	public void testSearch() throws IOException {
+		String[] includes = {"age","row"};
+		String[] ex = {};
 		SearchResponse response = client.prepareSearch("twitter", "searchdata")
 		        .setSearchType(SearchType.DFS_QUERY_THEN_FETCH)
 		        //.setQuery(QueryBuilders.termQuery("content", "郭襄"))                 // Query
@@ -74,6 +90,7 @@ public class SearchTest extends BaseTest {
 		        .setQuery(QueryBuilders.rangeQuery("age").from(12).to(18))     // Filter
 		        .setFrom(0)
 		        .setSize(5).setExplain(true)
+		        .setFetchSource(ex, includes)
 		        .addSort("row", SortOrder.ASC)
 		        .get();
 		
@@ -89,6 +106,110 @@ public class SearchTest extends BaseTest {
 //			System.out.println(aggregation.toString());
 //		}
 	}
+	
+	
+	
+	@Test
+	public void testSearch1_1() throws IOException {
+		String[] includes = {"age","row","content"};
+		String[] ex = {};
+		SearchRequest request = new SearchRequest();
+		request.types("article");
+		request.indices("_all"); //大多数引用 index parameter（索引参数）的 API 都支持在 multiple indices（多个索引）上执行，使用简单的 test1，test2， test3 表示形式（或者所有的索引 _all ）。它还支持通配符，例如 : test* 或者 *test 或者 te*t 或者 *test* ，并且可以 " add（ 添加）" (+)  和 "remove（删除）"(-) ，例如 :  +test* ， -test3 。
+		request.searchType(SearchType.DFS_QUERY_THEN_FETCH);
+		SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
+		searchSourceBuilder.from(0);
+		searchSourceBuilder.size(5);
+		searchSourceBuilder.sort("row", SortOrder.DESC);
+//		searchSourceBuilder.query(QueryBuilders.matchAllQuery());
+//		searchSourceBuilder.query(QueryBuilders.matchQuery("content", "昆仑三圣 张君宝")); 
+		searchSourceBuilder.query(
+					QueryBuilders.boolQuery()
+						.must(QueryBuilders.matchQuery("content", "罗汉堂首座苦慧禅师"))
+						.must(QueryBuilders.matchQuery("content", "首座苦智禅师"))
+						.mustNot(QueryBuilders.matchQuery("row", 22))
+						.filter(QueryBuilders.rangeQuery("row").from(12).to(18)));
+		searchSourceBuilder.fetchSource(includes, ex);
+		System.out.println("searchSourceBuilder:"+searchSourceBuilder.toString());
+		request.source(searchSourceBuilder);
+		for(SearchHit hit:client.search(request).actionGet().getHits())
+		{
+		    System.out.println(hit.getSourceAsString());
+		}
+	}
+	
+	
+	@Test
+	public void testSearch1_2() throws IOException {
+		SearchRequest request = new SearchRequest();
+		request.types("article");
+		request.indices("searchdata");
+		request.searchType(SearchType.DFS_QUERY_THEN_FETCH);
+		SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
+		searchSourceBuilder.from(0);
+		searchSourceBuilder.size(5);
+		searchSourceBuilder.sort("row", SortOrder.DESC);
+		searchSourceBuilder.query(
+			QueryBuilders.boolQuery()
+				.must(QueryBuilders.rangeQuery("row").from(22).to(24))
+				.mustNot(
+					QueryBuilders.matchQuery("row", 22))
+				.mustNot(
+					QueryBuilders.matchQuery("row", 23))
+		);
+		request.source(searchSourceBuilder);
+		System.out.println("searchSourceBuilder:"+searchSourceBuilder.toString());
+		for(SearchHit hit:client.search(request).actionGet().getHits())
+		{
+		    System.out.println(hit.getSourceAsString());
+		}
+	}
+	
+	@Test
+	public void _analyze() throws IOException {
+		/**
+		 * https://blog.csdn.net/xf_87/article/details/79402489
+		 * localhost:9200/users/_analyze
+		 * {
+			  "field":"user.hobby",
+			  "text":"eat an apple a day keeps doctor away"
+			}
+		 */
+	}
+	
+	/** 理解错误信息
+	 * GET /gb/tweet/_validate/query?explain                   <1>
+
+         {
+               "query" : {
+                     "tweet" : {
+                           "match" : "really powerful"
+                      }
+                }
+          }
+	 */
+	
+	 @Test
+    public void testIdsQuery() {
+	 String[] includes = {"age","row"};
+		String[] ex = {};
+		SearchResponse response = client.prepareSearch("twitter", "searchdata")
+		        .setSearchType(SearchType.DFS_QUERY_THEN_FETCH)
+		        //.setQuery(QueryBuilders.termQuery("content", "郭襄"))                 // Query
+		        //.setPostFilter(QueryBuilders.rangeQuery("age").from(12).to(18))     // Filter
+		        .setQuery(QueryBuilders.idsQuery().addIds("vGP09GgBgv2CKcsOmj9j"))     // Filter
+		        .setFrom(0)
+		        .setSize(5).setExplain(true)
+		        .setFetchSource(ex, includes)
+		        .addSort("row", SortOrder.ASC)
+		        .get();
+		long total = response.getHits().getTotalHits();
+		System.out.println(total);
+		for (int i = 0; i < response.getHits().getHits().length; i++) {
+			SearchHit searchHit = response.getHits().getHits()[i];
+			System.out.println(searchHit.getVersion()+":"+searchHit.getSourceAsString());
+		}
+    }
 	
 	@Test
 	public void testSearch2() throws IOException {

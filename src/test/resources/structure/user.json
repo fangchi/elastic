@@ -1,0 +1,28 @@
+{
+    "mappings" : {
+        "user" : {
+            "properties" : {
+                "id" : {
+                    "type" : "long",
+                    "store" : true
+                },
+                "name" : {
+                    "type" : "text",
+                    "store" : true,
+                    "index" : true,
+                    "analyzer":"english"
+                },
+                "birthday" : {
+                    "type" : "date",
+                    "store" : true
+                },
+                "hobby" : {
+                    "type" : "text",
+                    "store" : true,
+                    "index" :true,
+                    "analyzer":"ik_max_word"
+                }         
+            }
+        }
+    }
+}

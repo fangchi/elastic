@@ -1,8 +1,12 @@
 package com.fc.basic;
 
+import java.io.File;
 import java.io.IOException;
+import java.net.URL;
 import java.util.Collections;
 import java.util.Date;
+import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 import org.elasticsearch.action.admin.cluster.node.tasks.list.ListTasksResponse;
@@ -28,6 +32,34 @@ import org.junit.Test;
 
 public class IndexTest extends BaseTest{
 
+	@Test
+	public void testInitDataIndex() throws IOException {
+		URL url = SearchTest.class.getClassLoader().getResource("data.txt");
+		File file = new File(url.getFile());
+		List<String> contents = readFileByLines(file);
+		BulkRequestBuilder bulkRequest = client.prepareBulk();
+		int index = 0;
+		for (Iterator<String> iterator = contents.iterator(); iterator.hasNext();) {
+			String content = (String) iterator.next();
+			index++;
+			bulkRequest.add(client.prepareIndex("searchdata", "article")
+					.setRouting("xxxx") //指定存在哪个分片中 通过使用文档的 id 值的哈希值来控制 这时所有文档保存在一个分片中
+			        .setSource(XContentFactory.jsonBuilder()
+			                    .startObject()
+			                        .field("row", index)
+			                        .field("added_time", new Date())
+			                        .field("age", (int)(1+Math.random() * 30 ))
+			                        .field("content",content)
+			                    .endObject()
+			                  )
+			        );
+		}
+		BulkResponse bulkResponse = bulkRequest.get();
+		if (bulkResponse.hasFailures()) {
+		    System.out.println("sss");
+		}
+	}
+	
 	@Test
 	public void testCreateIndex() throws IOException{
 		XContentBuilder builder = XContentFactory.jsonBuilder()
@@ -60,6 +92,55 @@ public class IndexTest extends BaseTest{
 		System.out.println(response.getType());
 		System.out.println(response.getVersion());
 		System.out.println(response.getSeqNo());
+	}
+	
+	@Test
+	public void testDeleteByQueryIndex() throws IOException{
+		//localhost:9200/searchdata/article/_delete_by_query?conflicts=proceed
+		/**
+		 * {
+			  "query": {
+			    "match_all": {}
+			  }
+			}
+		 */
+	}
+	
+	
+	
+	@Test
+	public void testGetProperties() throws IOException{
+		/**
+{
+    "mappings": {
+        "_doc": {
+            "properties": {
+                "id": { "type": "text" },
+                "title":  { "type": "text"},
+                "abstract": { "type": "text"},
+                "author": {
+                    "properties": {
+                        "id": { "type": "text" },
+                        "name": { "type": "text" }
+                    }
+                }
+            }
+        }
+    }
+}
+		 */
+	}
+	
+	@Test
+	public void testRefresh() throws IOException{
+		/**
+		 * localhost:9200/searchdata/_refresh
+		 * 这些将创建一个文档并立即刷新索引，使其可见：
+		 * PUT /test/test/1?refresh
+		 * {"test": "test"}
+		 * PUT /test/test/2?refresh=true
+		 * {"test": "test"}
+		 */
 	}
 
 	@Test
