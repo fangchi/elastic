@@ -18,6 +18,7 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.document.Field.Store;
 import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.document.NumericDocValuesField;
+import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
@@ -27,10 +28,8 @@ import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queries.CustomScoreQuery;
 import org.apache.lucene.queries.function.FunctionQuery;
-import org.apache.lucene.queries.function.FunctionScoreQuery;
 import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.search.BooleanClause.Occur;
-import org.apache.lucene.search.SortField.Type;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.FuzzyQuery;
@@ -41,8 +40,13 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
+import org.apache.lucene.search.SortField.Type;
 import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.search.TopFieldDocs;
 import org.apache.lucene.search.WildcardQuery;
+import org.apache.lucene.search.grouping.GroupDocs;
+import org.apache.lucene.search.grouping.GroupingSearch;
+import org.apache.lucene.search.grouping.TopGroups;
 import org.apache.lucene.search.highlight.Fragmenter;
 import org.apache.lucene.search.highlight.Highlighter;
 import org.apache.lucene.search.highlight.InvalidTokenOffsetsException;
@@ -52,6 +56,7 @@ import org.apache.lucene.search.highlight.SimpleSpanFragmenter;
 import org.apache.lucene.search.similarities.ClassicSimilarity;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.PrintStreamInfoStream;
 import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.settings.Settings;
@@ -62,7 +67,6 @@ import org.wltea.analyzer.lucene.IKAnalyzer;
 
 import com.fc.basic.BaseTest;
 import com.fc.basic.SearchTest;
-import com.google.inject.util.Types;
 
 import junit.framework.TestCase;
 
@@ -138,10 +142,10 @@ public class LuceneTest extends TestCase{
 				//同时添加排序支持
 				document.add(new NumericDocValuesField("age",rowNumber));
 				
-				
 				document.add(new LongPoint("rank",rowNumber%10));
 				document.add(new StoredField("rank",rowNumber%10));
-				document.add(new NumericDocValuesField("rank",rowNumber%10));
+				document.add(new SortedDocValuesField("rank",new BytesRef(String.valueOf(rowNumber%10))));
+				
 				/**
 				 * If a document is indexed but not stored, you can search for it, but it won't be returned with search results.
 				 * One reasonably common pattern is to use lucene for search, but only have an ID field being stored which can be used to retrieve the full contents of the document/record from, 
@@ -385,7 +389,10 @@ public class LuceneTest extends TestCase{
             //SortField  contentSortField = new SortField("linenumber", Type.DOC);//doc排序
             SortField  contentSortField = new SortField(null, Type.SCORE); //评分排序
             Sort sort = new Sort(new SortField[] {contentSortField});
-            ScoreDoc[] hits = isearcher.search(customScoreQuery, 10,sort,true,false).scoreDocs;
+            TopFieldDocs results = isearcher.search(customScoreQuery, 10,sort,true,false);
+            ScoreDoc[] hits = results.scoreDocs;
+            System.out.println("总命中:"+results.totalHits);//总命中
+            System.out.println("按照:"+results.fields);//总命中
             printHits(isearcher,customScoreQuery,hits);
             ireader.close();
             directory.close();
@@ -396,30 +403,51 @@ public class LuceneTest extends TestCase{
         System.out.println("查看索引-----耗时：" + (date2.getTime() - date1.getTime()) + "ms\n");
     }
 	
+	@Test
+    public void testSearchGroupQuery() throws Exception{
+		 GroupingSearch groupingSearch = new GroupingSearch("rank");//指定要进行分组的索引
+		 groupingSearch.setGroupSort(new Sort(SortField.FIELD_SCORE));//指定分组排序规则
+		 groupingSearch.setFillSortFields(true);//是否填充SearchGroup的sortValues
+		 groupingSearch.setCachingInMB(10.0, true);
+		 groupingSearch.setAllGroups(true);
+	        //groupingSearch.setAllGroupHeads(true);
+		 groupingSearch.setGroupDocsLimit(3);//限制分组个数(每个分组内部返回的数据值)
+		 QueryParser parser = new QueryParser("content", getIKAnalyzer());
+	     String queryExpression = "昆仑";
+	     Query query = parser.parse(queryExpression);
+	     Directory directory = FSDirectory.open(Paths.get(INDEX_DIR));
+	     DirectoryReader ireader = DirectoryReader.open(directory);
+	     IndexSearcher searcher = new IndexSearcher(ireader);
+	     searcher.setSimilarity(new ClassicSimilarity());
+	        //在content索引上对包含some与content分词的索引进行具体查询，结果按照author索引的内容进行分组
+	     TopGroups<BytesRef> result = groupingSearch.search(searcher, query, 0, 1000);
+	     
+	     //总命中数
+	        System.out.println("总命中数:"+result.totalHitCount);
+	        //分组数
+	        System.out.println("分组数:"+result.groups.length);
+	        //按照分组打印查询结果
+	        for (GroupDocs<BytesRef> groupDocs : result.groups){
+	            if (groupDocs != null) {
+	                if (groupDocs.groupValue != null) {
+	                    System.out.println("分组:" + groupDocs.groupValue.utf8ToString());
+	                }else{
+	                    //由于建立索引时有一条数据没有在分组索引上建立SortedDocValued索引，因此这个分组的groupValue为null
+	                    System.out.println("分组:" + "unknow");
+	                }
+	                System.out.println("组内数据条数:" + groupDocs.totalHits);
+
+	                for(ScoreDoc scoreDoc : groupDocs.scoreDocs){
+	                    System.out.println("rank:" + searcher.doc(scoreDoc.doc).get("rank"));
+	                    System.out.println("content:" + searcher.doc(scoreDoc.doc).get("lineNumber"));
+	                    System.out.println("score:" +scoreDoc.score);
+	                    System.out.println(searcher.explain(query, scoreDoc.doc));
+	                }
+	                System.out.println("=====================================");
+	            }
+	        }
+	}
 	
-//	@Test
-//    public void testSearchFunctionScoreQuery2(){
-//        Date date1 = new Date();
-//        try{
-//        	Directory directory = FSDirectory.open(Paths.get(INDEX_DIR));
-//            DirectoryReader ireader = DirectoryReader.open(directory);
-//            IndexSearcher isearcher = new IndexSearcher(ireader);
-//            isearcher.setSimilarity(new ClassicSimilarity());
-//            Query query1=new TermQuery(new Term("content","昆仑"));
-//            FunctionScoreQuery customScoreQuery = FunctionScoreQuery.boostByValue(query1,new FCDoubleValuesSource());
-//            //SortField  contentSortField = new SortField("linenumber", Type.DOC);//doc排序
-//            SortField  contentSortField = new SortField(null, Type.SCORE); //评分排序
-//            Sort sort = new Sort(new SortField[] {contentSortField});
-//            ScoreDoc[] hits = isearcher.search(customScoreQuery, 10,sort).scoreDocs;
-//            printHits(isearcher,query1,hits);
-//            ireader.close();
-//            directory.close();
-//        }catch(Exception e){
-//            e.printStackTrace();
-//        }
-//        Date date2 = new Date();
-//        System.out.println("查看索引-----耗时：" + (date2.getTime() - date1.getTime()) + "ms\n");
-//    }
 	
 	private void printHits(IndexSearcher isearcher,Query query ,ScoreDoc[] hits) throws IOException, InvalidTokenOffsetsException{
 		System.out.println("查询结果条数:"+hits.length); 

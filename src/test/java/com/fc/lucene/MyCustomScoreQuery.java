@@ -33,9 +33,6 @@ class MyCustomScoreProvider extends CustomScoreProvider {
             throws IOException {
     	String rank = this.context.reader().document(doc).get("rank");
     	String lineNumber = this.context.reader().document(doc).get("lineNumber");
-    	if("66".equals(lineNumber)){
-    		System.out.println();
-    	}
     	Long rankVal = Long.parseLong(rank)+1;
     	return super.customScore(doc, subQueryScore, valSrcScore  * rankVal) ;
     }
